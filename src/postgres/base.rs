@@ -77,6 +77,10 @@ impl BaseRepository {
         &self.db
     }
 
+    pub fn breaker_state(&self) -> crate::circuit_breaker::CircuitBreakerState {
+        self.circuit_breaker.state()
+    }
+
     #[cfg(feature = "health")]
     pub async fn check_health(&self) -> crate::health::ServiceHealth {
         use crate::health::check_database_health;

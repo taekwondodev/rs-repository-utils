@@ -10,7 +10,7 @@ pub mod redis;
 #[cfg(feature = "health")]
 pub mod health;
 
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState};
 pub use error::RepositoryError;
 
 #[cfg(feature = "postgres")]

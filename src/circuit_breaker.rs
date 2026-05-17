@@ -4,6 +4,12 @@ use std::{sync::Arc, time::Duration};
 use crate::error::RepositoryError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitBreakerState {
+    Closed,
+    Open,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BreakerState {
     Closed,
     Open,
@@ -84,6 +90,14 @@ impl CircuitBreaker {
             BreakerState::Open => {
                 tracing::error!(circuit_breaker = %self.name, "State: OPEN — rejecting requests");
             }
+        }
+    }
+
+    pub fn state(&self) -> CircuitBreakerState {
+        if self.is_open() {
+            CircuitBreakerState::Open
+        } else {
+            CircuitBreakerState::Closed
         }
     }
 

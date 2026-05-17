@@ -13,6 +13,10 @@ impl BaseRedisRepository {
         Self { connection_manager, circuit_breaker }
     }
 
+    pub fn breaker_state(&self) -> crate::circuit_breaker::CircuitBreakerState {
+        self.circuit_breaker.state()
+    }
+
     pub async fn execute_with_circuit_breaker<F, Fut, T, E>(&self, operation: F) -> Result<T, E>
     where
         F: FnOnce(ConnectionManager) -> Fut + Send,
