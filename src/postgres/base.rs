@@ -29,55 +29,17 @@ impl BaseRepository {
         operation: F,
     ) -> Result<T, E>
     where
-        F: FnOnce(&Pool) -> Fut + Send,
+        F: FnOnce(Pool) -> Fut + Send,
         Fut: std::future::Future<Output = Result<T, E>> + Send,
         T: Send,
         E: From<RepositoryError>,
     {
         let start = std::time::Instant::now();
         let result = self.circuit_breaker
-            .call(|| async { operation(&self.db).await })
+            .call(|| async { operation(self.db.clone()).await })
             .await;
         if let Some(obs) = &self.observer {
             obs.on_db_query(op, table, start.elapsed().as_secs_f64(), result.is_ok());
-        }
-        result
-    }
-
-    pub async fn execute_transaction<F, T, E>(&self, table: &str, f: F) -> Result<T, E>
-    where
-        F: for<'tx> AsyncFnOnce(&'tx tokio_postgres::Transaction<'tx>) -> Result<T, E> + Send,
-        T: Send,
-        E: From<RepositoryError>,
-    {
-        let start = std::time::Instant::now();
-        let result = self.circuit_breaker
-            .call(|| async {
-                let mut client = self
-                    .db
-                    .get()
-                    .await
-                    .map_err(|e| E::from(RepositoryError::from(e)))?;
-                let tx = client
-                    .transaction()
-                    .await
-                    .map_err(|e| E::from(RepositoryError::from(e)))?;
-                match f(&tx).await {
-                    Ok(v) => {
-                        tx.commit()
-                            .await
-                            .map_err(|e| E::from(RepositoryError::from(e)))?;
-                        Ok(v)
-                    }
-                    Err(e) => {
-                        let _ = tx.rollback().await;
-                        Err(e)
-                    }
-                }
-            })
-            .await;
-        if let Some(obs) = &self.observer {
-            obs.on_db_query("transaction", table, start.elapsed().as_secs_f64(), result.is_ok());
         }
         result
     }

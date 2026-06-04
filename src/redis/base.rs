@@ -32,14 +32,14 @@ impl BaseRedisRepository {
         operation: F,
     ) -> Result<T, E>
     where
-        F: FnOnce(&ConnectionManager) -> Fut + Send,
+        F: FnOnce(ConnectionManager) -> Fut + Send,
         Fut: std::future::Future<Output = Result<T, E>> + Send,
         T: Send,
         E: From<RepositoryError>,
     {
         let start = std::time::Instant::now();
         let result = self.circuit_breaker
-            .call(|| async { operation(&self.connection_manager).await })
+            .call(|| async { operation(self.connection_manager.clone()).await })
             .await;
         if let Some(obs) = &self.observer {
             obs.on_redis_op(op, start.elapsed().as_secs_f64(), result.is_ok());
