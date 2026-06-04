@@ -1,76 +1,85 @@
 use deadpool_postgres::Pool;
 use std::sync::Arc;
-use tokio_postgres::types::ToSql;
 
-use crate::{circuit_breaker::CircuitBreaker, error::RepositoryError};
-use super::prepared_cache::PreparedStatementCache;
+use crate::{
+    circuit_breaker::CircuitBreaker,
+    error::RepositoryError,
+    observer::RepositoryObserver,
+};
 
 pub struct BaseRepository {
     db: Pool,
     circuit_breaker: Arc<CircuitBreaker>,
-    prepared_cache: PreparedStatementCache,
+    observer: Option<Arc<dyn RepositoryObserver>>,
 }
 
 impl BaseRepository {
-    pub fn new(db: Pool, circuit_breaker: Arc<CircuitBreaker>) -> Self {
-        Self {
-            db,
-            circuit_breaker,
-            prepared_cache: PreparedStatementCache::new(),
-        }
+    pub fn new(
+        db: Pool,
+        circuit_breaker: Arc<CircuitBreaker>,
+        observer: Option<Arc<dyn RepositoryObserver>>,
+    ) -> Self {
+        Self { db, circuit_breaker, observer }
     }
 
-    pub async fn execute_with_circuit_breaker<F, Fut, T, E>(&self, operation: F) -> Result<T, E>
+    pub async fn execute_with_circuit_breaker<F, Fut, T, E>(
+        &self,
+        op: &str,
+        table: &str,
+        operation: F,
+    ) -> Result<T, E>
     where
-        F: FnOnce(Pool) -> Fut + Send,
+        F: FnOnce(&Pool) -> Fut + Send,
         Fut: std::future::Future<Output = Result<T, E>> + Send,
         T: Send,
         E: From<RepositoryError>,
     {
-        let db = self.db.clone();
-        self.circuit_breaker
-            .call(|| async move { operation(db).await })
-            .await
+        let start = std::time::Instant::now();
+        let result = self.circuit_breaker
+            .call(|| async { operation(&self.db).await })
+            .await;
+        if let Some(obs) = &self.observer {
+            obs.on_db_query(op, table, start.elapsed().as_secs_f64(), result.is_ok());
+        }
+        result
     }
 
-    pub async fn execute_prepared(
-        &self,
-        query: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Vec<tokio_postgres::Row>, RepositoryError> {
-        let client = self.db.get().await?;
-        let stmt = self.prepared_cache.get_or_prepare(&client, query).await?;
-        Ok(client.query(&stmt, params).await?)
-    }
-
-    pub async fn execute_prepared_one(
-        &self,
-        query: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<tokio_postgres::Row, RepositoryError> {
-        let client = self.db.get().await?;
-        let stmt = self.prepared_cache.get_or_prepare(&client, query).await?;
-        Ok(client.query_one(&stmt, params).await?)
-    }
-
-    pub async fn execute_prepared_opt(
-        &self,
-        query: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<Option<tokio_postgres::Row>, RepositoryError> {
-        let client = self.db.get().await?;
-        let stmt = self.prepared_cache.get_or_prepare(&client, query).await?;
-        Ok(client.query_opt(&stmt, params).await?)
-    }
-
-    pub async fn execute_prepared_raw(
-        &self,
-        query: &str,
-        params: &[&(dyn ToSql + Sync)],
-    ) -> Result<u64, RepositoryError> {
-        let client = self.db.get().await?;
-        let stmt = self.prepared_cache.get_or_prepare(&client, query).await?;
-        Ok(client.execute(&stmt, params).await?)
+    pub async fn execute_transaction<F, T, E>(&self, table: &str, f: F) -> Result<T, E>
+    where
+        F: for<'tx> AsyncFnOnce(&'tx tokio_postgres::Transaction<'tx>) -> Result<T, E> + Send,
+        T: Send,
+        E: From<RepositoryError>,
+    {
+        let start = std::time::Instant::now();
+        let result = self.circuit_breaker
+            .call(|| async {
+                let mut client = self
+                    .db
+                    .get()
+                    .await
+                    .map_err(|e| E::from(RepositoryError::from(e)))?;
+                let tx = client
+                    .transaction()
+                    .await
+                    .map_err(|e| E::from(RepositoryError::from(e)))?;
+                match f(&tx).await {
+                    Ok(v) => {
+                        tx.commit()
+                            .await
+                            .map_err(|e| E::from(RepositoryError::from(e)))?;
+                        Ok(v)
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        Err(e)
+                    }
+                }
+            })
+            .await;
+        if let Some(obs) = &self.observer {
+            obs.on_db_query("transaction", table, start.elapsed().as_secs_f64(), result.is_ok());
+        }
+        result
     }
 
     pub fn pool(&self) -> &Pool {
@@ -89,7 +98,10 @@ impl BaseRepository {
         check_database_health(|| async move {
             cb.call(|| async {
                 let client = db.get().await.map_err(RepositoryError::from)?;
-                client.query_one("SELECT 1 as health_check", &[]).await.map_err(RepositoryError::from)?;
+                client
+                    .query_one("SELECT 1 as health_check", &[])
+                    .await
+                    .map_err(RepositoryError::from)?;
                 Ok::<(), RepositoryError>(())
             })
             .await
@@ -100,9 +112,4 @@ impl BaseRepository {
 
 pub trait FromRow: Sized {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, RepositoryError>;
-}
-
-/// Implement to expose pool metrics to your observability layer.
-pub trait RepositoryMetrics {
-    fn update_pool_metrics(&self);
 }

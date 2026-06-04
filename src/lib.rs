@@ -1,5 +1,6 @@
 pub mod circuit_breaker;
 pub mod error;
+pub mod observer;
 
 #[cfg(feature = "postgres")]
 pub mod postgres;
@@ -12,9 +13,10 @@ pub mod health;
 
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState};
 pub use error::RepositoryError;
+pub use observer::RepositoryObserver;
 
 #[cfg(feature = "postgres")]
-pub use postgres::{BaseRepository, DeleteBuilder, FromRow, InsertBuilder, OrderDirection, RepositoryMetrics, SelectBuilder, UpdateBuilder};
+pub use postgres::{BaseRepository, DeleteBuilder, FromRow, InsertBuilder, OrderDirection, SelectBuilder, UpdateBuilder};
 
 #[cfg(feature = "redis")]
 pub use redis::BaseRedisRepository;
