@@ -10,6 +10,6 @@ pub enum HealthStatus {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServiceHealth {
     pub status: HealthStatus,
-    pub message: String,
+    pub message: Box<str>,
     pub response_time_ms: Option<u64>,
 }

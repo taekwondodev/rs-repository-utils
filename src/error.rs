@@ -2,12 +2,12 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum RepositoryError {
-    Pool(String),
-    Query(String),
-    Redis(String),
-    Cache(String),
-    CircuitBreakerOpen(String),
-    InvalidQuery(String),
+    Pool(Box<str>),
+    Query(Box<str>),
+    Redis(Box<str>),
+    Cache(Box<str>),
+    CircuitBreakerOpen(Box<str>),
+    InvalidQuery(Box<str>),
 }
 
 impl fmt::Display for RepositoryError {
@@ -28,20 +28,20 @@ impl std::error::Error for RepositoryError {}
 #[cfg(feature = "postgres")]
 impl From<deadpool_postgres::PoolError> for RepositoryError {
     fn from(e: deadpool_postgres::PoolError) -> Self {
-        Self::Pool(e.to_string())
+        Self::Pool(e.to_string().into())
     }
 }
 
 #[cfg(feature = "postgres")]
 impl From<tokio_postgres::Error> for RepositoryError {
     fn from(e: tokio_postgres::Error) -> Self {
-        Self::Query(e.to_string())
+        Self::Query(e.to_string().into())
     }
 }
 
 #[cfg(feature = "redis")]
 impl From<redis::RedisError> for RepositoryError {
     fn from(e: redis::RedisError) -> Self {
-        Self::Redis(e.to_string())
+        Self::Redis(e.to_string().into())
     }
 }

@@ -22,17 +22,17 @@ where
     match result {
         Ok(Ok(())) => ServiceHealth {
             status: HealthStatus::Healthy,
-            message: format!("{check_name} connection successful"),
+            message: format!("{check_name} connection successful").into(),
             response_time_ms: Some(response_time),
         },
         Ok(Err(e)) => ServiceHealth {
             status: HealthStatus::Unhealthy,
-            message: format!("{check_name} error: {e}"),
+            message: format!("{check_name} error: {e}").into(),
             response_time_ms: Some(response_time),
         },
         Err(_) => ServiceHealth {
             status: HealthStatus::Unhealthy,
-            message: format!("{check_name} connection timeout"),
+            message: format!("{check_name} connection timeout").into(),
             response_time_ms: None,
         },
     }

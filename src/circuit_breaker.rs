@@ -66,7 +66,7 @@ impl CircuitBreaker {
         if self.is_open() {
             self.log_state(BreakerState::Open);
             return Err(E::from(RepositoryError::CircuitBreakerOpen(
-                format!("service '{}' is temporarily unavailable", self.name),
+                format!("service '{}' is temporarily unavailable", self.name).into(),
             )));
         }
 
