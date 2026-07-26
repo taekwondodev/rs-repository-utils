@@ -22,4 +22,7 @@ pub use postgres::{BaseRepository, DeleteBuilder, FromRow, InsertBuilder, OrderD
 pub use redis::BaseRedisRepository;
 
 #[cfg(feature = "health")]
-pub use health::{HealthStatus, ServiceHealth, check_database_health, check_redis_health, perform_health_check};
+pub use health::{
+    HealthIndicator, HealthReport, HealthStatus, ServiceHealth, check_all, check_database_health,
+    check_redis_health, perform_health_check,
+};

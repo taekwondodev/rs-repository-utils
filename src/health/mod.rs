@@ -1,5 +1,7 @@
+mod indicator;
 mod types;
 
+pub use indicator::{HealthIndicator, HealthReport, check_all};
 pub use types::{HealthStatus, ServiceHealth};
 
 use std::{fmt, future::Future, time::Duration};
