@@ -48,6 +48,47 @@ impl BaseRepository {
         &self.db
     }
 
+    /// Runs `operation` inside a transaction. Acquires a connection from the
+    /// pool and passes it to `operation` **by value** (the closure owns the
+    /// connection, consistent with the by-value `Pool` convention), so no
+    /// borrow crosses the await boundary. Mirrors
+    /// [`Self::execute_with_circuit_breaker`] — the whole transaction runs
+    /// under the circuit breaker and its outcome is reported to the
+    /// observer with `op`/`table`.
+    ///
+    /// The closure opens its own transaction with `client.transaction()`
+    /// and must `commit()` on success; on error the transaction is dropped
+    /// (rolled back) and the connection returns to the pool.
+    pub async fn with_transaction<F, Fut, T, E>(
+        &self,
+        op: &str,
+        table: &str,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        F: FnOnce(deadpool_postgres::Object) -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T, E>> + Send,
+        T: Send,
+        E: From<RepositoryError>,
+    {
+        let start = std::time::Instant::now();
+        let result = self
+            .circuit_breaker
+            .call(|| async {
+                let client = self
+                    .db
+                    .get()
+                    .await
+                    .map_err(|e| E::from(RepositoryError::from(e)))?;
+                operation(client).await
+            })
+            .await;
+        if let Some(obs) = &self.observer {
+            obs.on_db_query(op, table, start.elapsed().as_secs_f64(), result.is_ok());
+        }
+        result
+    }
+
     pub fn breaker_state(&self) -> crate::circuit_breaker::CircuitBreakerState {
         self.circuit_breaker.state()
     }
