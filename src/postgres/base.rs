@@ -48,58 +48,49 @@ impl BaseRepository {
         &self.db
     }
 
-    /// Runs `operation` inside a transaction, owning the whole lifecycle:
-    /// acquires a connection, begins, and commits on `Ok` / rolls back on
-    /// `Err`. Runs under the circuit breaker and reports to the observer
-    /// with `op`/`table`, mirroring [`Self::execute_with_circuit_breaker`].
+    /// Runs `operation` inside a transaction. Acquires a connection from the
+    /// pool and passes it to `operation` **by value** (the closure owns the
+    /// connection, consistent with the by-value `Pool` convention), so no
+    /// borrow crosses the await boundary. Mirrors
+    /// [`Self::execute_with_circuit_breaker`] — the whole transaction runs
+    /// under the circuit breaker and its outcome is reported to the
+    /// observer with `op`/`table`.
     ///
-    /// `operation` is an async closure over `&tokio_postgres::Transaction`:
-    /// `|tx| async { ... }`. The helper commits when it returns `Ok` and
-    /// rolls back when it returns `Err`; the closure never commits itself.
+    /// The closure opens its own transaction with `client.transaction()`
+    /// and must `commit()` on success; on error the transaction is dropped
+    /// (rolled back) and the connection returns to the pool.
     ///
-    /// The closure borrows the raw tokio-postgres `Transaction` (no `Drop`
-    /// impl). A `deadpool_postgres::Transaction` would not work here: its
-    /// `Drop` impl keeps the connection borrowed across the `await`, and the
-    /// borrow checker rejects the closure-over-`&` form. The raw transaction
-    /// also means a panic in `operation` leaves the connection in-transaction
-    /// when returned to the pool; deadpool resets it (rolled back).
-    pub async fn with_transaction<F, T, E>(
+    /// The closure-over-`&Transaction` form would be cleaner (the helper
+    /// owns commit/rollback), but it is unusable: an inline async closure's
+    /// returned future is concrete, not higher-ranked over the transaction
+    /// lifetime, so it cannot satisfy `for<'tx> AsyncFnOnce(&'tx Transaction)`.
+    /// A named `async fn` item can, but `AsyncFnOnce` takes a single argument,
+    /// so a transaction body that captures surrounding state (the normal
+    /// case) cannot be expressed — see ADR-0007 in rs-server.
+    pub async fn with_transaction<F, Fut, T, E>(
         &self,
         op: &str,
         table: &str,
         operation: F,
     ) -> Result<T, E>
     where
-        F: for<'tx> std::ops::AsyncFnOnce(&'tx tokio_postgres::Transaction<'tx>) -> Result<T, E>
-            + Send,
+        F: FnOnce(deadpool_postgres::Object) -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T, E>> + Send,
         T: Send,
         E: From<RepositoryError>,
     {
         let start = std::time::Instant::now();
-        let result = self.circuit_breaker.call(|| async {
-            let mut client = self
-                .db
-                .get()
-                .await
-                .map_err(|e| E::from(RepositoryError::from(e)))?;
-            let tx = (*client)
-                .transaction()
-                .await
-                .map_err(|e| E::from(RepositoryError::from(e)))?;
-            match operation(&tx).await {
-                Ok(v) => {
-                    tx.commit()
-                        .await
-                        .map_err(|e| E::from(RepositoryError::from(e)))?;
-                    Ok(v)
-                }
-                Err(e) => {
-                    let _ = tx.rollback().await;
-                    Err(e)
-                }
-            }
-        })
-        .await;
+        let result = self
+            .circuit_breaker
+            .call(|| async {
+                let client = self
+                    .db
+                    .get()
+                    .await
+                    .map_err(|e| E::from(RepositoryError::from(e)))?;
+                operation(client).await
+            })
+            .await;
         if let Some(obs) = &self.observer {
             obs.on_db_query(op, table, start.elapsed().as_secs_f64(), result.is_ok());
         }
